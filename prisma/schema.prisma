@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,5 +7,124 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Models à définir selon les besoins métier
-// Exemple : User, Vehicle, Dossier, etc.
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  CLIENT
+  GESTIONNAIRE
+  ADMIN
+}
+
+enum FuelType {
+  ESSENCE
+  DIESEL
+  HYBRIDE
+  ELECTRIQUE
+}
+
+enum Transmission {
+  MANUELLE
+  AUTOMATIQUE
+}
+
+enum VehicleStatus {
+  DISPONIBLE
+  VENDU
+  LOUE
+  RESERVE
+}
+
+enum PurchaseType {
+  VENTE
+  LOCATION
+}
+
+enum DossierType {
+  ACHAT
+  LOCATION
+}
+
+enum DossierStatus {
+  EN_ATTENTE_DOCUMENTS
+  EN_COURS
+  COMPLEMENT_DEMANDE
+  VALIDE
+  REFUSE
+}
+
+enum OptionType {
+  ASSURANCE_TOUS_RISQUES
+  ASSISTANCE_DEPANNAGE
+  ENTRETIEN_SAV
+  CONTROLE_TECHNIQUE
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  password  String
+  firstName String
+  lastName  String
+  phone     String?
+  role      Role      @default(CLIENT)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  dossiers  Dossier[]
+}
+
+model Vehicle {
+  id           String        @id @default(uuid())
+  brand        String
+  model        String
+  year         Int
+  mileage      Int
+  price        Decimal       @db.Decimal(10, 2)
+  fuelType     FuelType
+  transmission Transmission?
+  color        String?
+  description  String?
+  status       VehicleStatus @default(DISPONIBLE)
+  purchaseType PurchaseType
+  images       String[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  dossiers     Dossier[]
+}
+
+model Dossier {
+  id           String          @id @default(uuid())
+  type         DossierType
+  status       DossierStatus   @default(EN_ATTENTE_DOCUMENTS)
+  refusalMotif String?
+  clientId     String
+  vehicleId    String
+  client       User            @relation(fields: [clientId], references: [id])
+  vehicle      Vehicle         @relation(fields: [vehicleId], references: [id])
+  options      DossierOption[]
+  documents    Document[]
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+model DossierOption {
+  id        String     @id @default(uuid())
+  type      OptionType
+  dossierId String
+  dossier   Dossier    @relation(fields: [dossierId], references: [id])
+  createdAt DateTime   @default(now())
+
+  @@unique([dossierId, type])
+}
+
+model Document {
+  id         String   @id @default(uuid())
+  name       String
+  url        String
+  mimeType   String
+  size       Int
+  dossierId  String
+  dossier    Dossier  @relation(fields: [dossierId], references: [id])
+  uploadedAt DateTime @default(now())
+}
