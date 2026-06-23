@@ -1,0 +1,12 @@
+{
+  // Hérite des options du projet (esModuleInterop, strict, module node16…)
+  // pour que l'IDE type correctement les fichiers de test, exclus du tsconfig racine.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "types": ["jest", "node"]
+  },
+  "include": ["./**/*.ts", "../src/**/*.ts"],
+  "exclude": ["../node_modules", "../dist"]
+}

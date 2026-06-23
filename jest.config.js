@@ -8,7 +8,13 @@ module.exports = {
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
-  collectCoverageFrom: ['src/**/*.ts', '!src/server.ts', '!src/types/**'],
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/server.ts',
+    '!src/types/**',
+    '!src/config/**', // bootstrap (env validation/exit, singleton Prisma) — non testable utilement
+    '!src/utils/logger.ts', // configuration du logger (format dev/prod) — infra, pas de logique métier
+  ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
   clearMocks: true,
