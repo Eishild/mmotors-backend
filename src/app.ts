@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { errorHandler } from './middlewares/errorHandler';
+import authRouter from './modules/auth/auth.routes';
 
 const app: Application = express();
 
@@ -34,7 +35,7 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 // API routes (à compléter par domaine)
-// app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/auth', authRouter);
 // app.use('/api/v1/users', usersRouter);
 // app.use('/api/v1/vehicles', vehiclesRouter);
 // app.use('/api/v1/dossiers', dossiersRouter);
