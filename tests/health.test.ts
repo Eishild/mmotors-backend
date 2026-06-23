@@ -8,3 +8,11 @@ describe('GET /health', () => {
     expect(res.body).toEqual({ status: 'ok' });
   });
 });
+
+describe('Unknown route', () => {
+  it('returns 404 with a not-found message', async () => {
+    const res = await request(app).get('/api/v1/does-not-exist');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Route not found' });
+  });
+});

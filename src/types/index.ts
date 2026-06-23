@@ -1,11 +1,14 @@
 import { Request } from 'express';
+import { Role } from '@prisma/client';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: Role;
+}
 
 export interface AuthenticatedRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    role: string;
-  };
+  user?: AuthUser;
 }
 
 export type ApiResponse<T = unknown> = {

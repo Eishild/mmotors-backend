@@ -4,10 +4,10 @@ node_modules/
 # Build output
 dist/
 
-# Environment variables
+# Environment variables (garder uniquement .env.example partagé)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Logs
 logs/
