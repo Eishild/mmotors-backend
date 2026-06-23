@@ -4,7 +4,7 @@
   "description": "MMoto backend API - Node.js + Express + TypeScript",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "nodemon --watch src --ext ts --exec tsx src/server.ts",
+    "dev": "nodemon --exec tsx ./src/server.ts",
     "build": "tsc --project tsconfig.json",
     "start": "node dist/server.js",
     "test": "jest --runInBand --forceExit",
@@ -21,7 +21,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.1",
-    "helmet": "^8.0.0",
+    "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.2",
     "winston": "^3.14.2",
     "zod": "^3.23.8"
