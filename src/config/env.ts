@@ -4,6 +4,10 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().min(1),
+  // URL du projet Supabase (https://<ref>.supabase.co) — requise par supabase-js.
+  SUPABASE_URL: z.string().url(),
+  // Clé service_role : pouvoirs admin, côté serveur uniquement, jamais exposée au client.
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   JWT_SECRET: z.string().min(16),
   JWT_EXPIRES_IN: z.string().default('7d'),
   JWT_REFRESH_SECRET: z.string().min(16),
