@@ -1,6 +1,7 @@
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import {
+  DossierStatus,
   DossierType,
   PurchaseType,
   FuelType,
@@ -334,6 +335,329 @@ describe('POST /api/v1/dossiers (création)', () => {
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ vehicleId: 'not-a-uuid', type: DossierType.ACHAT });
 
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/v1/dossiers/me (US-007)', () => {
+  let meClientId: string;
+  let meToken: string;
+
+  beforeAll(async () => {
+    const me = await prisma.user.create({
+      data: {
+        email: `me${TEST_EMAIL_DOMAIN}`,
+        password: 'hashed',
+        firstName: 'Me',
+        lastName: 'Client',
+        role: Role.CLIENT,
+      },
+    });
+    meClientId = me.id;
+    meToken = signToken(meClientId, Role.CLIENT);
+    // Deux dossiers à ce client (création directe : on contourne les gardes de
+    // l'endpoint, sans intérêt ici).
+    await prisma.dossier.create({
+      data: { type: DossierType.ACHAT, clientId: meClientId, vehicleId: venteVehicleId },
+    });
+    await prisma.dossier.create({
+      data: { type: DossierType.LOCATION, clientId: meClientId, vehicleId: locationVehicleId },
+    });
+  }, 30000);
+
+  it('refuse l\'accès sans token (401)', async () => {
+    const res = await request(app).get('/api/v1/dossiers/me');
+    expect(res.status).toBe(401);
+  });
+
+  it('ne renvoie que les dossiers du client connecté, avec le véhicule', async () => {
+    const res = await request(app)
+      .get('/api/v1/dossiers/me')
+      .set('Authorization', `Bearer ${meToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(2);
+    expect(
+      res.body.data.every((d: { clientId: string }) => d.clientId === meClientId),
+    ).toBe(true);
+    // Relation véhicule incluse pour le suivi…
+    expect(res.body.data[0].vehicle).toMatchObject({ brand: 'TestMotors' });
+    // …mais aucune fuite du chemin de stockage des documents (url absente).
+    expect(res.body.data[0]).toHaveProperty('documents');
+  });
+});
+
+describe('GET /api/v1/dossiers (US-010)', () => {
+  const list = () => request(app).get('/api/v1/dossiers');
+
+  it('refuse l\'accès à un CLIENT (403)', async () => {
+    const res = await list().set('Authorization', `Bearer ${ownerToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('renvoie une liste paginée au GESTIONNAIRE', async () => {
+    const res = await list().set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.pagination).toMatchObject({ page: 1, limit: 20 });
+    // Vue back-office : client + véhicule + nombre de documents.
+    const sample = res.body.data[0];
+    expect(sample.client).toBeDefined();
+    expect(sample.vehicle).toBeDefined();
+    expect(sample._count).toHaveProperty('documents');
+  });
+
+  it('filtre par statut', async () => {
+    const res = await list()
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .query({ status: DossierStatus.EN_ATTENTE_DOCUMENTS });
+
+    expect(res.status).toBe(200);
+    expect(
+      res.body.data.every(
+        (d: { status: string }) => d.status === DossierStatus.EN_ATTENTE_DOCUMENTS,
+      ),
+    ).toBe(true);
+  });
+
+  it('filtre par type', async () => {
+    const res = await list()
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .query({ type: DossierType.LOCATION });
+
+    expect(res.status).toBe(200);
+    expect(
+      res.body.data.every((d: { type: string }) => d.type === DossierType.LOCATION),
+    ).toBe(true);
+  });
+
+  it('renvoie 400 pour un statut invalide', async () => {
+    const res = await list()
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .query({ status: 'PAS_UN_STATUT' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('PATCH /api/v1/dossiers/:id/status (US-011)', () => {
+  const patch = (id: string) => request(app).patch(`/api/v1/dossiers/${id}/status`);
+  let statusClientId: string;
+  let freshDossierId: string;
+
+  beforeAll(async () => {
+    const c = await prisma.user.create({
+      data: {
+        email: `status${TEST_EMAIL_DOMAIN}`,
+        password: 'hashed',
+        firstName: 'Status',
+        lastName: 'Client',
+        role: Role.CLIENT,
+      },
+    });
+    statusClientId = c.id;
+  }, 30000);
+
+  // Dossier neuf (EN_ATTENTE_DOCUMENTS) avant chaque test : les transitions
+  // mutent l'état, on repart donc d'une base connue à chaque fois.
+  beforeEach(async () => {
+    const d = await prisma.dossier.create({
+      data: { type: DossierType.ACHAT, clientId: statusClientId, vehicleId: venteVehicleId },
+    });
+    freshDossierId = d.id;
+  }, 30000);
+
+  it('refuse l\'accès à un CLIENT (403)', async () => {
+    const res = await patch(freshDossierId)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ status: DossierStatus.EN_COURS });
+    expect(res.status).toBe(403);
+  });
+
+  it('passe EN_ATTENTE_DOCUMENTS → EN_COURS (200)', async () => {
+    const res = await patch(freshDossierId)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.EN_COURS });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe(DossierStatus.EN_COURS);
+  });
+
+  it('refuse une transition invalide EN_ATTENTE_DOCUMENTS → VALIDE (409)', async () => {
+    const res = await patch(freshDossierId)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.VALIDE });
+
+    expect(res.status).toBe(409);
+  });
+
+  it('refuse un REFUSE sans motif (400)', async () => {
+    const res = await patch(freshDossierId)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.REFUSE });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('refuse un motif sur un statut non-REFUSE (400)', async () => {
+    const res = await patch(freshDossierId)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.EN_COURS, refusalMotif: 'motif de trop' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('refuse avec motif après mise en instruction et persiste le motif (200)', async () => {
+    await patch(freshDossierId)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.EN_COURS });
+
+    const res = await patch(freshDossierId)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.REFUSE, refusalMotif: 'Pièces illisibles' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe(DossierStatus.REFUSE);
+    expect(res.body.data.refusalMotif).toBe('Pièces illisibles');
+  });
+
+  it('renvoie 404 pour un dossier inexistant', async () => {
+    const res = await patch('00000000-0000-0000-0000-000000000000')
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.EN_COURS });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('renvoie 400 si l\'id n\'est pas un UUID', async () => {
+    const res = await patch('not-a-uuid')
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ status: DossierStatus.EN_COURS });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
+  const options = (id: string) => request(app).post(`/api/v1/dossiers/${id}/options`);
+  let optClientId: string;
+  let optToken: string;
+  let locationDossierId: string; // LOCATION, EN_ATTENTE_DOCUMENTS, à optClient
+  let achatDossierId: string; // ACHAT (pour tester le rejet 409)
+  let finalizedDossierId: string; // LOCATION mais VALIDE (rejet 409)
+
+  beforeAll(async () => {
+    const c = await prisma.user.create({
+      data: {
+        email: `options${TEST_EMAIL_DOMAIN}`,
+        password: 'hashed',
+        firstName: 'Opt',
+        lastName: 'Client',
+        role: Role.CLIENT,
+      },
+    });
+    optClientId = c.id;
+    optToken = signToken(optClientId, Role.CLIENT);
+
+    const loc = await prisma.dossier.create({
+      data: { type: DossierType.LOCATION, clientId: optClientId, vehicleId: locationVehicleId },
+    });
+    const achat = await prisma.dossier.create({
+      data: { type: DossierType.ACHAT, clientId: optClientId, vehicleId: venteVehicleId },
+    });
+    const finalized = await prisma.dossier.create({
+      data: {
+        type: DossierType.LOCATION,
+        clientId: optClientId,
+        vehicleId: locationVehicleId,
+        status: DossierStatus.VALIDE,
+      },
+    });
+    locationDossierId = loc.id;
+    achatDossierId = achat.id;
+    finalizedDossierId = finalized.id;
+  }, 30000);
+
+  it('refuse l\'accès sans token (401)', async () => {
+    const res = await options(locationDossierId).send({
+      options: [OptionType.ASSURANCE_TOUS_RISQUES],
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('interdit à un GESTIONNAIRE d\'ajouter des options (403)', async () => {
+    const res = await options(locationDossierId)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
+    expect(res.status).toBe(403);
+  });
+
+  it('interdit à un autre CLIENT d\'ajouter des options au dossier d\'autrui (403)', async () => {
+    // ownerToken = client A, dossier appartient à optClient (client B).
+    const res = await options(locationDossierId)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
+    expect(res.status).toBe(403);
+  });
+
+  it('permet au propriétaire d\'ajouter des options (201)', async () => {
+    const res = await options(locationDossierId)
+      .set('Authorization', `Bearer ${optToken}`)
+      .send({
+        options: [OptionType.ASSURANCE_TOUS_RISQUES, OptionType.ASSISTANCE_DEPANNAGE],
+      });
+
+    expect(res.status).toBe(201);
+    const types = res.body.data.options.map((o: { type: string }) => o.type);
+    expect(types).toContain(OptionType.ASSURANCE_TOUS_RISQUES);
+    expect(types).toContain(OptionType.ASSISTANCE_DEPANNAGE);
+  });
+
+  it('est idempotent : ré-ajouter une option existante ne la duplique pas (201)', async () => {
+    const res = await options(locationDossierId)
+      .set('Authorization', `Bearer ${optToken}`)
+      .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
+
+    expect(res.status).toBe(201);
+    const assurances = res.body.data.options.filter(
+      (o: { type: string }) => o.type === OptionType.ASSURANCE_TOUS_RISQUES,
+    );
+    expect(assurances).toHaveLength(1);
+  });
+
+  it('refuse les options sur un dossier ACHAT (409)', async () => {
+    const res = await options(achatDossierId)
+      .set('Authorization', `Bearer ${optToken}`)
+      .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
+    expect(res.status).toBe(409);
+  });
+
+  it('refuse les options sur un dossier finalisé (409)', async () => {
+    const res = await options(finalizedDossierId)
+      .set('Authorization', `Bearer ${optToken}`)
+      .send({ options: [OptionType.CONTROLE_TECHNIQUE] });
+    expect(res.status).toBe(409);
+  });
+
+  it('refuse un tableau d\'options vide (400)', async () => {
+    const res = await options(locationDossierId)
+      .set('Authorization', `Bearer ${optToken}`)
+      .send({ options: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('renvoie 404 pour un dossier inexistant', async () => {
+    const res = await options('00000000-0000-0000-0000-000000000000')
+      .set('Authorization', `Bearer ${optToken}`)
+      .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
+    expect(res.status).toBe(404);
+  });
+
+  it('renvoie 400 si l\'id n\'est pas un UUID', async () => {
+    const res = await options('not-a-uuid')
+      .set('Authorization', `Bearer ${optToken}`)
+      .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
     expect(res.status).toBe(400);
   });
 });
