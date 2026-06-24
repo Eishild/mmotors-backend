@@ -1,7 +1,7 @@
-import { Prisma, Vehicle, VehicleStatus } from '@prisma/client';
+import { DossierStatus, Prisma, PurchaseType, Vehicle, VehicleStatus } from '@prisma/client';
 import { prisma } from '../../config/prisma';
 import { AppError } from '../../middlewares/errorHandler';
-import { ListVehiclesQuery } from './vehicles.schema';
+import { CreateVehicleInput, ListVehiclesQuery, UpdateVehicleInput } from './vehicles.schema';
 
 export interface PaginationMeta {
   page: number;
@@ -28,6 +28,8 @@ export async function listVehicles(query: ListVehiclesQuery): Promise<ListVehicl
     query;
 
   const where: Prisma.VehicleWhereInput = {
+    // Catalogue public : non soft-deleted (available) ET commercialement libre.
+    available: true,
     status: VehicleStatus.DISPONIBLE,
   };
 
@@ -84,8 +86,25 @@ export async function listVehicles(query: ListVehiclesQuery): Promise<ListVehicl
   };
 }
 
-/** Récupère un véhicule par son id, ou lève une 404 s'il n'existe pas. */
+/**
+ * Récupère un véhicule visible publiquement (fiche détaillée, US-002).
+ * Un véhicule soft-deleted (available=false) est considéré comme inexistant -> 404.
+ */
 export async function getVehicleById(id: string): Promise<Vehicle> {
+  const vehicle = await prisma.vehicle.findFirst({ where: { id, available: true } });
+
+  if (!vehicle) {
+    throw new AppError(404, 'Véhicule introuvable');
+  }
+
+  return vehicle;
+}
+
+/**
+ * Récupère un véhicule par id quel que soit son état (back-office), ou lève 404.
+ * Sert de garde commune aux opérations d'écriture (update / delete / toggle).
+ */
+async function findVehicleOrThrow(id: string): Promise<Vehicle> {
   const vehicle = await prisma.vehicle.findUnique({ where: { id } });
 
   if (!vehicle) {
@@ -93,4 +112,50 @@ export async function getVehicleById(id: string): Promise<Vehicle> {
   }
 
   return vehicle;
+}
+
+/** Création d'un véhicule (US-008). */
+export async function createVehicle(input: CreateVehicleInput): Promise<Vehicle> {
+  return prisma.vehicle.create({ data: input });
+}
+
+/** Mise à jour d'un véhicule, 404 si introuvable. */
+export async function updateVehicle(id: string, input: UpdateVehicleInput): Promise<Vehicle> {
+  await findVehicleOrThrow(id);
+  return prisma.vehicle.update({ where: { id }, data: input });
+}
+
+/**
+ * Soft delete : on ne supprime pas la ligne (les dossiers y font référence via
+ * une FK), on bascule simplement available à false pour la retirer du catalogue.
+ */
+export async function softDeleteVehicle(id: string): Promise<Vehicle> {
+  await findVehicleOrThrow(id);
+  return prisma.vehicle.update({ where: { id }, data: { available: false } });
+}
+
+/**
+ * Bascule le type d'achat VENTE↔LOCATION (US-009).
+ * Garde-fou métier : on refuse la bascule si au moins un dossier EN_COURS est
+ * lié au véhicule (changer le type sous un dossier en instruction le rendrait
+ * incohérent) -> 409 avec un avertissement explicite.
+ */
+export async function toggleVehiclePurchaseType(id: string): Promise<Vehicle> {
+  const vehicle = await findVehicleOrThrow(id);
+
+  const ongoingDossiers = await prisma.dossier.count({
+    where: { vehicleId: id, status: DossierStatus.EN_COURS },
+  });
+
+  if (ongoingDossiers > 0) {
+    throw new AppError(
+      409,
+      `Impossible de changer le type : ${ongoingDossiers} dossier(s) en cours sont liés à ce véhicule`,
+    );
+  }
+
+  const nextPurchaseType =
+    vehicle.purchaseType === PurchaseType.VENTE ? PurchaseType.LOCATION : PurchaseType.VENTE;
+
+  return prisma.vehicle.update({ where: { id }, data: { purchaseType: nextPurchaseType } });
 }
