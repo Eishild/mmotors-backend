@@ -14,8 +14,12 @@ export class AppError extends Error {
   }
 }
 
-export function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunction): void {
+export function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction): void {
+  // Contexte commun joint à chaque log : permet de retrouver la requête fautive.
+  const context = { method: req.method, url: req.originalUrl };
+
   if (err instanceof ZodError) {
+    logger.warn(`Validation échouée: ${err.message}`, context);
     res.status(400).json({
       message: 'Données invalides',
       errors: err.flatten().fieldErrors,
@@ -24,6 +28,11 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
   }
 
   if (err instanceof AppError) {
+    // Erreur applicative maîtrisée : warn pour le client (4xx), error pour le serveur (5xx).
+    logger.log(err.statusCode >= 500 ? 'error' : 'warn', err.message, {
+      ...context,
+      statusCode: err.statusCode,
+    });
     res.status(err.statusCode).json({ message: err.message });
     return;
   }
@@ -33,10 +42,19 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
   if (err instanceof MulterError) {
     const message =
       err.code === 'LIMIT_FILE_SIZE' ? 'Fichier trop volumineux (max 10 Mo)' : err.message;
+    logger.warn(`Upload refusé: ${message}`, { ...context, code: err.code });
     res.status(400).json({ message });
     return;
   }
 
-  logger.error(err);
-  res.status(500).json({ message: 'Internal server error' });
+  // Erreur inattendue (500) : on logge le message + la stack complète côté serveur…
+  logger.error(err.message, { ...context, stack: err.stack });
+
+  // …mais on ne renvoie jamais la stack au client en production.
+  // En dev/test on l'expose pour faciliter le debug.
+  const isProduction = process.env.NODE_ENV === 'production';
+  res.status(500).json({
+    message: 'Internal server error',
+    ...(isProduction ? {} : { error: err.message, stack: err.stack }),
+  });
 }

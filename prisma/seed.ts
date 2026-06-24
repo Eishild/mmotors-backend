@@ -6,6 +6,7 @@ import {
   VehicleStatus,
   Prisma,
 } from '@prisma/client';
+import { logger } from '../src/utils/logger';
 
 const prisma = new PrismaClient();
 
@@ -171,12 +172,12 @@ async function main(): Promise<void> {
   const result = await prisma.vehicle.createMany({ data: vehicles });
 
   const disponibles = vehicles.filter((v) => v.status === VehicleStatus.DISPONIBLE).length;
-  console.log(`✅ Seed terminé : ${result.count} véhicules créés (${disponibles} DISPONIBLE).`);
+  logger.info(`Seed terminé : ${result.count} véhicules créés (${disponibles} DISPONIBLE).`);
 }
 
 main()
   .catch((error) => {
-    console.error('❌ Échec du seed :', error);
+    logger.error('Échec du seed', { error });
     process.exit(1);
   })
   .finally(() => {
