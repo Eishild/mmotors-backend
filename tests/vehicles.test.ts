@@ -1,13 +1,18 @@
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 import {
+  DossierStatus,
+  DossierType,
   FuelType,
   Prisma,
   PurchaseType,
+  Role,
   Transmission,
   VehicleStatus,
 } from '@prisma/client';
 import app from '../src/app';
 import { prisma } from '../src/config/prisma';
+import { env } from '../src/config/env';
 
 /**
  * Tests d'intégration des routes publiques du catalogue (US-001 / US-002).
@@ -101,8 +106,23 @@ beforeAll(async () => {
   await prisma.vehicle.createMany({ data: fixture });
 });
 
+// Email marqueur pour isoler/nettoyer les utilisateurs créés par cette suite.
+const TEST_EMAIL_DOMAIN = '@vehicles-test.local';
+
+// Tokens signés directement : authenticate ne fait que vérifier le JWT et
+// attacher req.user (pas de lookup DB), donc inutile de créer ces utilisateurs.
+const signToken = (role: Role): string =>
+  jwt.sign({ sub: `user-${role}`, email: `bo${TEST_EMAIL_DOMAIN}`, role }, env.JWT_SECRET, {
+    expiresIn: '1h',
+  });
+const gestionnaireToken = signToken(Role.GESTIONNAIRE);
+const clientToken = signToken(Role.CLIENT);
+
 afterAll(async () => {
+  // Ordre imposé par les FK : dossiers -> véhicules ; users en dernier.
+  await prisma.dossier.deleteMany();
   await prisma.vehicle.deleteMany();
+  await prisma.user.deleteMany({ where: { email: { endsWith: TEST_EMAIL_DOMAIN } } });
   await prisma.$disconnect();
 });
 
@@ -287,5 +307,213 @@ describe('GET /api/v1/vehicles/:id', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.message).toMatch(/introuvable/i);
+  });
+});
+
+// ─── Routes back-office (US-008 / US-009) ──────────────────────────────────────
+// Ces tests s'exécutent APRÈS ceux de la liste (ordre source), donc les
+// véhicules qu'ils créent/modifient n'affectent pas les totaux assertés plus haut.
+
+const UNKNOWN_ID = '00000000-0000-0000-0000-000000000000';
+
+const validCreateBody = {
+  brand: 'Ford',
+  model: 'Focus',
+  year: 2021,
+  mileage: 30000,
+  price: 14000,
+  fuelType: FuelType.ESSENCE,
+  purchaseType: PurchaseType.VENTE,
+  transmission: Transmission.MANUELLE,
+  color: 'Bleu',
+  images: ['https://placehold.co/600x400?text=Focus'],
+};
+
+// Helper : crée un véhicule via l'API (en gestionnaire) et renvoie sa ressource.
+async function createVehicleViaApi(
+  overrides: Partial<typeof validCreateBody> = {},
+): Promise<{ id: string; purchaseType: string }> {
+  const res = await request(app)
+    .post(BASE)
+    .set('Authorization', `Bearer ${gestionnaireToken}`)
+    .send({ ...validCreateBody, ...overrides });
+  expect(res.status).toBe(201);
+  return res.body.data;
+}
+
+// ─── Protection des routes (authenticate + authorize) ──────────────────────────
+
+describe('Protection des routes back-office', () => {
+  it('refuse sans token (401)', async () => {
+    const res = await request(app).post(BASE).send(validCreateBody);
+    expect(res.status).toBe(401);
+  });
+
+  it('refuse un CLIENT (403)', async () => {
+    const res = await request(app)
+      .post(BASE)
+      .set('Authorization', `Bearer ${clientToken}`)
+      .send(validCreateBody);
+    expect(res.status).toBe(403);
+  });
+});
+
+// ─── POST /api/v1/vehicles ─────────────────────────────────────────────────────
+
+describe('POST /api/v1/vehicles', () => {
+  it('crée un véhicule (201) avec available=true par défaut', async () => {
+    const res = await request(app)
+      .post(BASE)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send(validCreateBody);
+
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ brand: 'Ford', model: 'Focus', available: true });
+    expect(res.body.data.id).toEqual(expect.any(String));
+  });
+
+  it('rejette un corps invalide (400) : champs requis manquants / valeurs hors bornes', async () => {
+    const res = await request(app)
+      .post(BASE)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ brand: '', year: 1800, mileage: -5, price: 0, fuelType: 'PLASMA' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toHaveProperty('brand');
+    expect(res.body.errors).toHaveProperty('price');
+    expect(res.body.errors).toHaveProperty('fuelType');
+  });
+});
+
+// ─── PUT /api/v1/vehicles/:id ──────────────────────────────────────────────────
+
+describe('PUT /api/v1/vehicles/:id', () => {
+  it('met à jour un véhicule existant (200)', async () => {
+    const created = await createVehicleViaApi();
+
+    const res = await request(app)
+      .put(`${BASE}/${created.id}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ price: 12000, color: 'Vert' });
+
+    expect(res.status).toBe(200);
+    expect(Number(res.body.data.price)).toBe(12000);
+    expect(res.body.data.color).toBe('Vert');
+  });
+
+  it('renvoie 404 pour un véhicule inexistant', async () => {
+    const res = await request(app)
+      .put(`${BASE}/${UNKNOWN_ID}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({ price: 9999 });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('rejette un corps vide (400) : au moins un champ requis', async () => {
+    const created = await createVehicleViaApi();
+
+    const res = await request(app)
+      .put(`${BASE}/${created.id}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`)
+      .send({});
+
+    expect(res.status).toBe(400);
+  });
+});
+
+// ─── DELETE /api/v1/vehicles/:id (soft delete) ─────────────────────────────────
+
+describe('DELETE /api/v1/vehicles/:id', () => {
+  it('soft delete : bascule available=false et retire du catalogue public (200)', async () => {
+    const created = await createVehicleViaApi();
+
+    const del = await request(app)
+      .delete(`${BASE}/${created.id}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(del.status).toBe(200);
+    expect(del.body.data.available).toBe(false);
+
+    // La ligne existe toujours en base (préservation de l'historique)...
+    const stillInDb = await prisma.vehicle.findUnique({ where: { id: created.id } });
+    expect(stillInDb).not.toBeNull();
+
+    // ...mais la fiche publique renvoie 404 et le véhicule n'est plus listé.
+    const detail = await request(app).get(`${BASE}/${created.id}`);
+    expect(detail.status).toBe(404);
+
+    const list = await request(app).get(BASE).query({ brand: 'Ford' });
+    expect(list.body.data.some((v: { id: string }) => v.id === created.id)).toBe(false);
+  });
+
+  it('renvoie 404 pour un véhicule inexistant', async () => {
+    const res = await request(app)
+      .delete(`${BASE}/${UNKNOWN_ID}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(res.status).toBe(404);
+  });
+});
+
+// ─── PATCH /api/v1/vehicles/:id/status (bascule VENTE↔LOCATION) ─────────────────
+
+describe('PATCH /api/v1/vehicles/:id/status', () => {
+  it('bascule VENTE -> LOCATION puis LOCATION -> VENTE (200)', async () => {
+    const created = await createVehicleViaApi({ purchaseType: PurchaseType.VENTE });
+
+    const toLocation = await request(app)
+      .patch(`${BASE}/${created.id}/status`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+    expect(toLocation.status).toBe(200);
+    expect(toLocation.body.data.purchaseType).toBe(PurchaseType.LOCATION);
+
+    const backToVente = await request(app)
+      .patch(`${BASE}/${created.id}/status`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+    expect(backToVente.status).toBe(200);
+    expect(backToVente.body.data.purchaseType).toBe(PurchaseType.VENTE);
+  });
+
+  it('renvoie 404 pour un véhicule inexistant', async () => {
+    const res = await request(app)
+      .patch(`${BASE}/${UNKNOWN_ID}/status`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("refuse la bascule (409) si un dossier EN_COURS est lié au véhicule", async () => {
+    const created = await createVehicleViaApi({ purchaseType: PurchaseType.LOCATION });
+
+    // Dossier en cours d'instruction sur ce véhicule (nécessite un client réel).
+    const client = await prisma.user.create({
+      data: {
+        email: `client${TEST_EMAIL_DOMAIN}`,
+        password: 'hash',
+        firstName: 'Test',
+        lastName: 'Client',
+        role: Role.CLIENT,
+      },
+    });
+    await prisma.dossier.create({
+      data: {
+        type: DossierType.LOCATION,
+        status: DossierStatus.EN_COURS,
+        clientId: client.id,
+        vehicleId: created.id,
+      },
+    });
+
+    const res = await request(app)
+      .patch(`${BASE}/${created.id}/status`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/dossier/i);
+
+    // Le type n'a pas changé.
+    const unchanged = await prisma.vehicle.findUnique({ where: { id: created.id } });
+    expect(unchanged?.purchaseType).toBe(PurchaseType.LOCATION);
   });
 });
