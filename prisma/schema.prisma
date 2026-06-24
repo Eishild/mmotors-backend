@@ -87,6 +87,9 @@ model Vehicle {
   description  String?
   status       VehicleStatus @default(DISPONIBLE)
   purchaseType PurchaseType
+  // Soft delete : on ne supprime jamais physiquement un véhicule (préserve
+  // l'historique des dossiers liés) ; on bascule available à false.
+  available    Boolean       @default(true)
   images       String[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
