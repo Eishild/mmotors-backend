@@ -10,11 +10,39 @@ import {
 import { prisma } from '../../config/prisma';
 import { AppError } from '../../middlewares/errorHandler';
 import { AuthUser } from '../../types';
-import { CreateDossierInput } from './dossiers.schema';
+import {
+  AddDossierOptionsInput,
+  CreateDossierInput,
+  ListDossiersQuery,
+  UpdateDossierStatusInput,
+} from './dossiers.schema';
 import { getSignedUrl, uploadDocument } from './storage.service';
 
 /** Statuts considérés comme "terminés" : un dossier dans cet état ne bloque pas un nouveau dépôt. */
 const TERMINAL_STATUSES: DossierStatus[] = [DossierStatus.VALIDE, DossierStatus.REFUSE];
+
+/**
+ * Machine à états des dossiers (US-011). Transitions autorisées depuis chaque
+ * statut, conformément au flux CLAUDE.md :
+ *   EN_ATTENTE_DOCUMENTS → EN_COURS → (COMPLEMENT_DEMANDE) → VALIDE / REFUSE
+ * VALIDE et REFUSE sont terminaux. COMPLEMENT_DEMANDE peut revenir en EN_COURS
+ * (le client a fourni le complément) ou être tranché directement.
+ */
+const ALLOWED_TRANSITIONS: Record<DossierStatus, DossierStatus[]> = {
+  [DossierStatus.EN_ATTENTE_DOCUMENTS]: [DossierStatus.EN_COURS],
+  [DossierStatus.EN_COURS]: [
+    DossierStatus.COMPLEMENT_DEMANDE,
+    DossierStatus.VALIDE,
+    DossierStatus.REFUSE,
+  ],
+  [DossierStatus.COMPLEMENT_DEMANDE]: [
+    DossierStatus.EN_COURS,
+    DossierStatus.VALIDE,
+    DossierStatus.REFUSE,
+  ],
+  [DossierStatus.VALIDE]: [],
+  [DossierStatus.REFUSE]: [],
+};
 
 /** Dossier renvoyé avec ses options (relation incluse). */
 export type DossierWithOptions = Prisma.DossierGetPayload<{ include: { options: true } }>;
@@ -157,6 +185,166 @@ export async function createDossier(
         ? { options: { createMany: { data: input.options.map((type) => ({ type })) } } }
         : {}),
     },
+    include: { options: true },
+  });
+}
+
+/**
+ * Vue "suivi client" (US-007) : on n'expose ni les chemins de stockage internes
+ * (Document.url) ni les données d'autres clients. Métadonnées des documents
+ * seulement (nom/taille/date) — assez pour suivre l'avancement.
+ */
+const clientDossierInclude = {
+  vehicle: { select: { id: true, brand: true, model: true, year: true, images: true } },
+  options: { select: { type: true } },
+  documents: { select: { id: true, name: true, mimeType: true, size: true, uploadedAt: true } },
+} satisfies Prisma.DossierInclude;
+
+/** Vue "back-office" (US-010) : client + véhicule + nombre de documents. */
+const staffDossierInclude = {
+  client: { select: { id: true, firstName: true, lastName: true, email: true } },
+  vehicle: { select: { id: true, brand: true, model: true, year: true } },
+  options: { select: { type: true } },
+  _count: { select: { documents: true } },
+} satisfies Prisma.DossierInclude;
+
+export type ClientDossier = Prisma.DossierGetPayload<{ include: typeof clientDossierInclude }>;
+export type StaffDossier = Prisma.DossierGetPayload<{ include: typeof staffDossierInclude }>;
+
+export interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface ListDossiersResult {
+  data: StaffDossier[];
+  pagination: PaginationMeta;
+}
+
+/**
+ * Liste les dossiers du client connecté (US-007), du plus récent au plus ancien.
+ * Filtrage par clientId : un client ne voit jamais que ses propres dossiers.
+ */
+export async function listMyDossiers(clientId: string): Promise<ClientDossier[]> {
+  return prisma.dossier.findMany({
+    where: { clientId },
+    include: clientDossierInclude,
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+/**
+ * Liste paginée des dossiers pour le back-office (US-010), filtrable par statut
+ * et type. Sert l'écran "dossiers à instruire" (le filtre status est appliqué
+ * côté appelant). findMany + count en parallèle, même `where`.
+ */
+export async function listDossiers(query: ListDossiersQuery): Promise<ListDossiersResult> {
+  const { status, type, page, limit } = query;
+
+  const where: Prisma.DossierWhereInput = {
+    ...(status ? { status } : {}),
+    ...(type ? { type } : {}),
+  };
+
+  const skip = (page - 1) * limit;
+
+  const [data, total] = await Promise.all([
+    prisma.dossier.findMany({
+      where,
+      include: staffDossierInclude,
+      skip,
+      take: limit,
+      orderBy: { createdAt: 'asc' }, // file d'instruction : les plus anciens d'abord.
+    }),
+    prisma.dossier.count({ where }),
+  ]);
+
+  return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+}
+
+/**
+ * Change le statut d'un dossier (US-011 : valider / refuser / demander complément).
+ *
+ * Gardes :
+ *  - dossier inexistant -> 404 ;
+ *  - transition interdite par la machine à états -> 409 ;
+ *  - REFUSE sans motif déjà bloqué par le schéma Zod (400).
+ *
+ * `refusalMotif` n'est persisté que pour REFUSE ; pour tout autre statut on le
+ * remet à null afin qu'un dossier rouvert ne traîne pas un ancien motif.
+ */
+export async function updateDossierStatus(
+  id: string,
+  input: UpdateDossierStatusInput,
+): Promise<StaffDossier> {
+  const dossier = await prisma.dossier.findUnique({ where: { id }, select: { status: true } });
+
+  if (!dossier) {
+    throw new AppError(404, 'Dossier introuvable');
+  }
+
+  if (!ALLOWED_TRANSITIONS[dossier.status].includes(input.status)) {
+    throw new AppError(
+      409,
+      `Transition de statut invalide : ${dossier.status} → ${input.status}`,
+    );
+  }
+
+  return prisma.dossier.update({
+    where: { id },
+    data: {
+      status: input.status,
+      refusalMotif: input.status === DossierStatus.REFUSE ? input.refusalMotif : null,
+    },
+    include: staffDossierInclude,
+  });
+}
+
+/**
+ * Ajoute des options à un dossier de location (US-006).
+ *
+ * Réservé au CLIENT propriétaire : un client A qui vise le dossier d'un client B
+ * reçoit 403 (les options sont un choix personnel du locataire). Gardes :
+ *  - dossier inexistant -> 404 ;
+ *  - pas le propriétaire -> 403 ;
+ *  - dossier non LOCATION -> 409 (les options ne concernent que la location) ;
+ *  - dossier finalisé (VALIDE/REFUSE) -> 409 (ses options ne sont plus modifiables).
+ *
+ * createMany + skipDuplicates : ré-ajouter une option déjà présente est
+ * idempotent (respecte @@unique([dossierId, type]) sans lever d'erreur).
+ */
+export async function addOptionsToDossier(
+  dossierId: string,
+  clientId: string,
+  input: AddDossierOptionsInput,
+): Promise<DossierWithOptions> {
+  const dossier = await prisma.dossier.findUnique({
+    where: { id: dossierId },
+    select: { clientId: true, type: true, status: true },
+  });
+
+  if (!dossier) {
+    throw new AppError(404, 'Dossier introuvable');
+  }
+  if (dossier.clientId !== clientId) {
+    throw new AppError(403, 'Accès refusé à ce dossier');
+  }
+  if (dossier.type !== DossierType.LOCATION) {
+    throw new AppError(409, 'Les options ne concernent que les dossiers de type LOCATION');
+  }
+  if (TERMINAL_STATUSES.includes(dossier.status)) {
+    throw new AppError(409, 'Ce dossier est finalisé : ses options ne sont plus modifiables');
+  }
+
+  await prisma.dossierOption.createMany({
+    data: input.options.map((type) => ({ dossierId, type })),
+    skipDuplicates: true,
+  });
+
+  return prisma.dossier.findUniqueOrThrow({
+    where: { id: dossierId },
     include: { options: true },
   });
 }
