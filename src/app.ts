@@ -1,6 +1,7 @@
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { errorHandler } from './middlewares/errorHandler';
 import { env } from './config/env';
@@ -31,6 +32,9 @@ app.use(limiter);
 // Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Cookies : peuple req.cookies, nécessaire pour lire le JWT du cookie httpOnly.
+app.use(cookieParser());
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {

@@ -4,11 +4,68 @@ import {
   Transmission,
   PurchaseType,
   VehicleStatus,
+  Role,
   Prisma,
 } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 import { logger } from '../src/utils/logger';
 
 const prisma = new PrismaClient();
+
+// Même coût bcrypt que l'inscription (auth.service.ts) pour rester cohérent.
+const BCRYPT_COST = 10;
+
+/**
+ * Comptes de démonstration : un CLIENT et un GESTIONNAIRE.
+ *
+ * Mots de passe en clair UNIQUEMENT ici pour faciliter les tests manuels ;
+ * ils sont hashés bcrypt avant insertion. Identifiants à NE PAS utiliser en prod.
+ */
+const users: Array<{
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  role: Role;
+}> = [
+  {
+    email: 'client@mmotors.dev',
+    password: 'Client123!',
+    firstName: 'Camille',
+    lastName: 'Client',
+    phone: '0600000001',
+    role: Role.CLIENT,
+  },
+  {
+    email: 'gestionnaire@mmotors.dev',
+    password: 'Gestion123!',
+    firstName: 'Gaël',
+    lastName: 'Gestionnaire',
+    phone: '0600000002',
+    role: Role.GESTIONNAIRE,
+  },
+];
+
+async function seedUsers(): Promise<void> {
+  for (const user of users) {
+    const password = await bcrypt.hash(user.password, BCRYPT_COST);
+    // Upsert sur l'email (unique) : idempotent et sans casser les dossiers liés.
+    await prisma.user.upsert({
+      where: { email: user.email },
+      update: { password, firstName: user.firstName, lastName: user.lastName, phone: user.phone, role: user.role },
+      create: {
+        email: user.email,
+        password,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        role: user.role,
+      },
+    });
+    logger.info(`Compte ${user.role} prêt : ${user.email}`);
+  }
+}
 
 /**
  * Jeu de données de démonstration pour le catalogue véhicules.
@@ -166,6 +223,8 @@ const vehicles: Prisma.VehicleCreateManyInput[] = [
 ];
 
 async function main(): Promise<void> {
+  await seedUsers();
+
   // Idempotent : on repart d'un catalogue propre à chaque exécution.
   await prisma.vehicle.deleteMany();
 

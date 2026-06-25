@@ -6,7 +6,12 @@ import { AuthenticatedRequest } from '../types';
 import { JwtPayload } from '../modules/auth/auth.service';
 
 /**
- * Vérifie le JWT du header Authorization (Bearer) et attache req.user.
+ * Vérifie le JWT et attache req.user.
+ *
+ * Source du token, par ordre de priorité :
+ *  1. cookie httpOnly `token` (flux navigateur sécurisé) ;
+ *  2. header Authorization `Bearer <token>` (clients API / rétro-compatibilité).
+ *
  * Lève une 401 si le token est absent, mal formé ou invalide/expiré.
  */
 export function authenticate(
@@ -14,14 +19,20 @@ export function authenticate(
   _res: Response,
   next: NextFunction,
 ): void {
+  const cookieToken = req.cookies?.token as string | undefined;
   const header = req.headers.authorization;
 
-  if (!header || !header.startsWith('Bearer ')) {
+  let token: string | undefined;
+  if (cookieToken) {
+    token = cookieToken;
+  } else if (header?.startsWith('Bearer ')) {
+    token = header.slice('Bearer '.length).trim();
+  }
+
+  if (!token) {
     next(new AppError(401, 'Token manquant'));
     return;
   }
-
-  const token = header.slice('Bearer '.length).trim();
 
   try {
     const payload = jwt.verify(token, env.JWT_SECRET) as JwtPayload;
