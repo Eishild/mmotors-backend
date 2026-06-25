@@ -4,7 +4,7 @@ import { z } from 'zod';
  * Strong password policy: 8+ chars, with at least one lower, one upper and one digit.
  * US-003 demande un "mot de passe sécurisé".
  */
-const passwordSchema = z
+export const passwordSchema = z
   .string()
   .min(8, 'Le mot de passe doit contenir au moins 8 caractères')
   .regex(/[a-z]/, 'Le mot de passe doit contenir une minuscule')

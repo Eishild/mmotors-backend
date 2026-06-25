@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import * as authService from './auth.service';
 import { RegisterInput, LoginInput } from './auth.schema';
 import { TOKEN_COOKIE, tokenCookieOptions, clearTokenCookieOptions } from './auth.cookie';
+import { AuthenticatedRequest } from '../../types';
 
 export async function register(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -29,4 +30,18 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
 export function logout(_req: Request, res: Response): void {
   res.clearCookie(TOKEN_COOKIE, clearTokenCookieOptions);
   res.status(200).json({ message: 'Déconnexion réussie' });
+}
+
+/**
+ * GET /auth/me — renvoie le profil de l'utilisateur authentifié.
+ * authenticate a déjà validé le JWT et rempli req.user ; on relit la base pour
+ * exposer le profil complet et à jour (le token ne porte que id/email/role).
+ */
+export async function me(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const user = await authService.getMe(req.user!.id);
+    res.status(200).json({ data: user });
+  } catch (error) {
+    next(error);
+  }
 }

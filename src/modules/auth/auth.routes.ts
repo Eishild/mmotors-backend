@@ -2,6 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { env } from '../../config/env';
 import { validate } from '../../middlewares/validate';
+import { authenticate } from '../../middlewares/authenticate';
 import { registerSchema, loginSchema } from './auth.schema';
 import * as authController from './auth.controller';
 
@@ -29,5 +30,7 @@ router.post('/register', authLimiter, validate(registerSchema), authController.r
 router.post('/login', authLimiter, validate(loginSchema), authController.login);
 // Logout : efface simplement le cookie, pas de rate-limit ni d'auth nécessaire.
 router.post('/logout', authController.logout);
+// Profil de l'utilisateur connecté : authenticate (cookie httpOnly ou Bearer).
+router.get('/me', authenticate, authController.me);
 
 export default router;

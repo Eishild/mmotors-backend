@@ -62,6 +62,22 @@ export async function register(input: RegisterInput): Promise<AuthResult> {
   return { user: stripPassword(user), token: signToken(user) };
 }
 
+/**
+ * Récupère l'utilisateur courant à partir de son id (extrait du JWT par le
+ * middleware authenticate). On relit la base plutôt que de se contenter du
+ * payload du token : le JWT ne porte que id/email/role, alors que le front a
+ * besoin du profil complet (firstName, lastName, phone) et à jour.
+ *
+ * Le compte a pu être supprimé alors que le token est encore valide -> 401.
+ */
+export async function getMe(userId: string): Promise<SafeUser> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    throw new AppError(401, 'Utilisateur introuvable');
+  }
+  return stripPassword(user);
+}
+
 export async function login(input: LoginInput): Promise<AuthResult> {
   const user = await prisma.user.findUnique({ where: { email: input.email } });
 
