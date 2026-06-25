@@ -517,3 +517,79 @@ describe('PATCH /api/v1/vehicles/:id/status', () => {
     expect(unchanged?.purchaseType).toBe(PurchaseType.LOCATION);
   });
 });
+
+// ─── Mode back-office : GET ?scope=admin & fiche d'un véhicule retiré (US-008) ──
+
+describe('GET /api/v1/vehicles?scope=admin (back-office)', () => {
+  // Véhicule retiré (soft delete) dédié à ces tests : marque unique pour le
+  // retrouver sans ambiguïté malgré les véhicules créés par les blocs précédents.
+  let retiredId: string;
+
+  beforeAll(async () => {
+    const retired = await prisma.vehicle.create({
+      data: {
+        brand: 'AdminScope',
+        model: 'Retired',
+        year: 2017,
+        mileage: 120000,
+        price: '8000.00',
+        fuelType: FuelType.ESSENCE,
+        purchaseType: PurchaseType.VENTE,
+        status: VehicleStatus.DISPONIBLE,
+        available: false, // retiré du catalogue public
+        images: [],
+      },
+    });
+    retiredId = retired.id;
+  });
+
+  it('staff : liste tout le parc, y compris non-DISPONIBLE et retirés', async () => {
+    const res = await request(app)
+      .get(BASE)
+      .query({ scope: 'admin', limit: 100 })
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(res.status).toBe(200);
+    // L'Audi RESERVE (fixture) et notre véhicule retiré (available=false) doivent
+    // apparaître, alors qu'ils sont invisibles côté public.
+    expect(res.body.data.some((v: { status: string }) => v.status === 'RESERVE')).toBe(true);
+    expect(res.body.data.some((v: { id: string }) => v.id === retiredId)).toBe(true);
+    expect(res.body.data.some((v: { available: boolean }) => v.available === false)).toBe(true);
+  });
+
+  it('visiteur anonyme : scope=admin refusé (403)', async () => {
+    const res = await request(app).get(BASE).query({ scope: 'admin' });
+    expect(res.status).toBe(403);
+  });
+
+  it('CLIENT : scope=admin refusé (403)', async () => {
+    const res = await request(app)
+      .get(BASE)
+      .query({ scope: 'admin' })
+      .set('Authorization', `Bearer ${clientToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('staff : filtre available=false ne renvoie que des véhicules retirés', async () => {
+    const res = await request(app)
+      .get(BASE)
+      .query({ scope: 'admin', available: 'false', limit: 100 })
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.data.every((v: { available: boolean }) => v.available === false)).toBe(true);
+    expect(res.body.data.some((v: { id: string }) => v.id === retiredId)).toBe(true);
+  });
+
+  it('staff : GET /:id renvoie un véhicule retiré (200) là où le public a 404', async () => {
+    const staffRes = await request(app)
+      .get(`${BASE}/${retiredId}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+    expect(staffRes.status).toBe(200);
+    expect(staffRes.body.data.available).toBe(false);
+
+    const publicRes = await request(app).get(`${BASE}/${retiredId}`);
+    expect(publicRes.status).toBe(404);
+  });
+});

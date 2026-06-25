@@ -46,6 +46,18 @@ export const listVehiclesQuerySchema = z
     // éviter qu'un client ne demande des pages gigantesques.
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100, 'limit ne peut pas dépasser 100').default(20),
+
+    // ─── Mode back-office (GESTIONNAIRE/ADMIN, US-008) ───────────────────────
+    // `scope=admin` lève le filtre public (available + DISPONIBLE) pour lister
+    // l'ensemble du parc. Le contrôle de rôle est fait dans le contrôleur ; ces
+    // deux filtres ne sont pris en compte qu'en mode admin (ignorés côté public).
+    scope: z.enum(['public', 'admin']).optional(),
+    status: z.nativeEnum(VehicleStatus).optional(),
+    // Query string → on n'accepte explicitement que "true"/"false" ('' = ignoré).
+    available: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((v) => (v === undefined ? undefined : v === 'true')),
   })
   // Cohérence de la fourchette de prix.
   .refine((q) => q.minPrice === undefined || q.maxPrice === undefined || q.minPrice <= q.maxPrice, {
