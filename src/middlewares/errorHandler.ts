@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { MulterError } from 'multer';
+import * as Sentry from '@sentry/node';
 import { logger } from '../utils/logger';
 
 export class AppError extends Error {
@@ -33,6 +34,10 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
       ...context,
       statusCode: err.statusCode,
     });
+    // On ne remonte à Sentry que les erreurs serveur (5xx), pas les 4xx clients.
+    if (err.statusCode >= 500) {
+      Sentry.captureException(err);
+    }
     res.status(err.statusCode).json({ message: err.message });
     return;
   }
@@ -49,6 +54,9 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
 
   // Erreur inattendue (500) : on logge le message + la stack complète côté serveur…
   logger.error(err.message, { ...context, stack: err.stack });
+
+  // …et on la remonte à Sentry (erreur serveur non maîtrisée).
+  Sentry.captureException(err);
 
   // …mais on ne renvoie jamais la stack au client en production.
   // En dev/test on l'expose pour faciliter le debug.
