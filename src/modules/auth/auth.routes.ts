@@ -27,5 +27,7 @@ const authLimiter = rateLimit({
 
 router.post('/register', authLimiter, validate(registerSchema), authController.register);
 router.post('/login', authLimiter, validate(loginSchema), authController.login);
+// Logout : efface simplement le cookie, pas de rate-limit ni d'auth nécessaire.
+router.post('/logout', authController.logout);
 
 export default router;

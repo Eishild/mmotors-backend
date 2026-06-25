@@ -1,4 +1,5 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { Role } from '@prisma/client';
@@ -99,6 +100,22 @@ describe('Auth endpoints (DB)', () => {
       expect(res.body.data.user).not.toHaveProperty('password');
     });
 
+    it('pose le token dans un cookie httpOnly nommé "token"', async () => {
+      const res = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email: validRegister.email, password: validRegister.password });
+
+      const cookies = res.headers['set-cookie'] as unknown as string[];
+      const tokenCookie = cookies.find((c) => c.startsWith('token='));
+      expect(tokenCookie).toBeDefined();
+      expect(tokenCookie).toMatch(/HttpOnly/i);
+      // En environnement de test (NODE_ENV !== production) : SameSite=Lax, pas de Secure.
+      expect(tokenCookie).toMatch(/SameSite=Lax/i);
+      expect(tokenCookie).not.toMatch(/Secure/i);
+      // Le cookie porte bien le même JWT que le body.
+      expect(tokenCookie).toContain(`token=${res.body.data.token}`);
+    });
+
     it('renvoie un message générique si le mot de passe est incorrect (401)', async () => {
       const res = await request(app)
         .post('/api/v1/auth/login')
@@ -131,12 +148,28 @@ describe('Auth endpoints (DB)', () => {
   });
 }); // fin "Auth endpoints (DB)"
 
+// ─── POST /api/v1/auth/logout (pas d'accès base) ───────────────────────────────
+describe('POST /api/v1/auth/logout', () => {
+  it('efface le cookie token (200)', async () => {
+    const res = await request(app).post('/api/v1/auth/logout');
+
+    expect(res.status).toBe(200);
+    const cookies = res.headers['set-cookie'] as unknown as string[];
+    const tokenCookie = cookies.find((c) => c.startsWith('token='));
+    // clearCookie pose un cookie vide qui expire immédiatement.
+    expect(tokenCookie).toBeDefined();
+    expect(tokenCookie).toMatch(/token=;/);
+  });
+});
+
 // ─── Middlewares authenticate / authorize ──────────────────────────────────────
 // Mini-app dédiée : teste les middlewares en isolation, sans accès base de données.
 
 describe('Middlewares authenticate & authorize', () => {
   const protectedApp = express();
   protectedApp.use(express.json());
+  // cookie-parser pour pouvoir tester l'authentification par cookie httpOnly.
+  protectedApp.use(cookieParser());
   protectedApp.get('/me', authenticate, (req, res) => {
     res.json({ user: (req as AuthenticatedRequest).user });
   });
@@ -163,6 +196,25 @@ describe('Middlewares authenticate & authorize', () => {
       const res = await request(protectedApp)
         .get('/me')
         .set('Authorization', `Bearer ${signToken(Role.CLIENT)}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.user).toMatchObject({ id: 'user-id', role: Role.CLIENT });
+    });
+
+    it('accepte un token valide depuis le cookie httpOnly (200)', async () => {
+      const res = await request(protectedApp)
+        .get('/me')
+        .set('Cookie', `token=${signToken(Role.CLIENT)}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.user).toMatchObject({ id: 'user-id', role: Role.CLIENT });
+    });
+
+    it('donne la priorité au cookie sur un header Bearer invalide (200)', async () => {
+      const res = await request(protectedApp)
+        .get('/me')
+        .set('Cookie', `token=${signToken(Role.CLIENT)}`)
+        .set('Authorization', 'Bearer not.a.real.token');
 
       expect(res.status).toBe(200);
       expect(res.body.user).toMatchObject({ id: 'user-id', role: Role.CLIENT });
