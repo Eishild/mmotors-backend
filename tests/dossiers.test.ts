@@ -661,3 +661,90 @@ describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ─── GET /api/v1/dossiers/:id (détail + documents) ─────────────────────────────
+
+describe('GET /api/v1/dossiers/:id', () => {
+  const UNKNOWN_ID = '00000000-0000-0000-0000-000000000000';
+  let detailDossierId: string;
+  let docId: string;
+
+  beforeAll(async () => {
+    const dossier = await prisma.dossier.create({
+      data: { type: DossierType.ACHAT, clientId: ownerId, vehicleId: venteVehicleId },
+    });
+    detailDossierId = dossier.id;
+    // Document inséré directement (le binaire/Storage est hors scope ici, mocké).
+    const doc = await prisma.document.create({
+      data: {
+        name: 'piece-identite.pdf',
+        url: `${dossier.id}/stored-uuid.pdf`, // chemin interne, ne doit pas fuiter
+        mimeType: 'application/pdf',
+        size: 12345,
+        dossierId: dossier.id,
+      },
+    });
+    docId = doc.id;
+  }, 30000);
+
+  afterAll(async () => {
+    await prisma.document.deleteMany({ where: { dossierId: detailDossierId } });
+    await prisma.dossier.delete({ where: { id: detailDossierId } });
+  });
+
+  it('refuse l\'accès sans token (401)', async () => {
+    const res = await request(app).get(`/api/v1/dossiers/${detailDossierId}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('refuse un client non propriétaire (403)', async () => {
+    const res = await request(app)
+      .get(`/api/v1/dossiers/${detailDossierId}`)
+      .set('Authorization', `Bearer ${otherClientToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('renvoie 404 pour un dossier inexistant', async () => {
+    const res = await request(app)
+      .get(`/api/v1/dossiers/${UNKNOWN_ID}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('renvoie 400 si l\'id n\'est pas un UUID', async () => {
+    const res = await request(app)
+      .get('/api/v1/dossiers/not-a-uuid')
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('staff : renvoie le détail + documents avec URL signée, sans le chemin interne', async () => {
+    const res = await request(app)
+      .get(`/api/v1/dossiers/${detailDossierId}`)
+      .set('Authorization', `Bearer ${gestionnaireToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.id).toBe(detailDossierId);
+    expect(res.body.data.client).toMatchObject({ id: ownerId });
+    expect(res.body.data.documents).toHaveLength(1);
+
+    const doc = res.body.data.documents[0];
+    expect(doc).toMatchObject({
+      id: docId,
+      name: 'piece-identite.pdf',
+      mimeType: 'application/pdf',
+      signedUrl: SIGNED_URL,
+    });
+    // Le chemin de stockage interne ne doit jamais être exposé.
+    expect(doc.url).toBeUndefined();
+  });
+
+  it('propriétaire : peut ouvrir son propre dossier (200)', async () => {
+    const res = await request(app)
+      .get(`/api/v1/dossiers/${detailDossierId}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.documents[0].signedUrl).toBe(SIGNED_URL);
+  });
+});

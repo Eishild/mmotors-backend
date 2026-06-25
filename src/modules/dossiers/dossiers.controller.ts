@@ -46,6 +46,25 @@ export async function listDossiers(
 }
 
 /**
+ * GET /dossiers/:id — détail d'un dossier + ses documents (ouverture back-office,
+ * ou suivi par le client propriétaire). Accès propriétaire OU staff (vérifié dans
+ * le service). Chaque document est accompagné d'une URL signée éphémère.
+ */
+export async function getDossierById(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const dossierId = dossierIdParamSchema.parse(req.params.id);
+    const dossier = await dossiersService.getDossierDetailForUser(dossierId, req.user!);
+    res.status(200).json({ data: dossier });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * PATCH /dossiers/:id/status — valider / refuser / demander un complément (US-011).
  * Corps validé par validate(updateDossierStatusSchema) ; :id validé ici.
  */
