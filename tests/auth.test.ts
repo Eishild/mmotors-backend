@@ -146,6 +146,56 @@ describe('Auth endpoints (DB)', () => {
       expect(wrongPassword.body.message).toBe(unknownEmail.body.message);
     });
   });
+
+  // ─── GET /api/v1/auth/me ───────────────────────────────────────────────────────
+
+  describe('GET /api/v1/auth/me', () => {
+    it('renvoie le profil complet du porteur du cookie, sans password (200)', async () => {
+      const register = await request(app).post('/api/v1/auth/register').send(validRegister);
+      const cookie = (register.headers['set-cookie'] as unknown as string[]).find((c) =>
+        c.startsWith('token='),
+      ) as string;
+
+      const res = await request(app).get('/api/v1/auth/me').set('Cookie', cookie);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.email).toBe(validRegister.email);
+      expect(res.body.data.firstName).toBe(validRegister.firstName);
+      expect(res.body.data.role).toBe(Role.CLIENT);
+      expect(res.body.data).not.toHaveProperty('password');
+    });
+
+    it('accepte aussi le token via header Bearer (200)', async () => {
+      const register = await request(app).post('/api/v1/auth/register').send(validRegister);
+      const token = register.body.data.token as string;
+
+      const res = await request(app)
+        .get('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.email).toBe(validRegister.email);
+    });
+
+    it('refuse une requête non authentifiée (401)', async () => {
+      const res = await request(app).get('/api/v1/auth/me');
+      expect(res.status).toBe(401);
+    });
+
+    it('renvoie 401 si le compte a été supprimé alors que le token est encore valide', async () => {
+      const register = await request(app).post('/api/v1/auth/register').send(validRegister);
+      const token = register.body.data.token as string;
+
+      // Le token reste cryptographiquement valide mais l'utilisateur n'existe plus.
+      await prisma.user.delete({ where: { email: validRegister.email } });
+
+      const res = await request(app)
+        .get('/api/v1/auth/me')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(401);
+    });
+  });
 }); // fin "Auth endpoints (DB)"
 
 // ─── POST /api/v1/auth/logout (pas d'accès base) ───────────────────────────────
