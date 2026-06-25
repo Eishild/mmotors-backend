@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { logger } from '../utils/logger';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -15,12 +16,15 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000),
   RATE_LIMIT_MAX: z.coerce.number().default(100),
+  // DSN Sentry : optionnel. Absent ou vide => monitoring désactivé (dégradation propre).
+  // La chaîne vide (SENTRY_DSN= dans .env) est normalisée en undefined avant validation.
+  SENTRY_DSN: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
 });
 
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
-  console.error('Invalid environment variables:', parsed.error.flatten().fieldErrors);
+  logger.error('Invalid environment variables', { errors: parsed.error.flatten().fieldErrors });
   process.exit(1);
 }
 
