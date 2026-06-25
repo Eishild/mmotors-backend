@@ -26,6 +26,12 @@ router.get(
   dossiersController.listDossiers,
 );
 
+// ─── Détail d'un dossier + documents (US-010, ou propriétaire) ─────────────────
+// Accès propriétaire OU staff : authenticate suffit ici, le contrôle d'ownership
+// est fait dans le service (403 si ni propriétaire ni back-office). Déclaré APRÈS
+// "/" et "/me" pour ne pas capter ces routes littérales.
+router.get('/:id', authenticate, dossiersController.getDossierById);
+
 // ─── Back-office : changement de statut (US-011) ───────────────────────────────
 // Valider / refuser (motif obligatoire) / demander un complément.
 router.patch(

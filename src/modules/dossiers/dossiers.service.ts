@@ -208,8 +208,40 @@ const staffDossierInclude = {
   _count: { select: { documents: true } },
 } satisfies Prisma.DossierInclude;
 
+/**
+ * Vue "détail" d'un dossier (ouverture depuis le back-office US-010, ou par le
+ * client propriétaire) : dossier complet + métadonnées des documents. On
+ * sélectionne `url` (chemin de stockage interne) uniquement pour générer l'URL
+ * signée ; il n'est jamais renvoyé tel quel.
+ */
+const dossierDetailInclude = {
+  client: { select: { id: true, firstName: true, lastName: true, email: true } },
+  vehicle: { select: { id: true, brand: true, model: true, year: true } },
+  options: { select: { type: true } },
+  documents: {
+    select: { id: true, name: true, mimeType: true, size: true, uploadedAt: true, url: true },
+    orderBy: { uploadedAt: 'asc' },
+  },
+} satisfies Prisma.DossierInclude;
+
 export type ClientDossier = Prisma.DossierGetPayload<{ include: typeof clientDossierInclude }>;
 export type StaffDossier = Prisma.DossierGetPayload<{ include: typeof staffDossierInclude }>;
+
+/** Document exposé au front : métadonnées + URL signée éphémère (60 s). */
+export interface DossierDocumentWithUrl {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  uploadedAt: Date;
+  signedUrl: string;
+}
+
+/** Détail d'un dossier : comme la vue staff, mais avec les documents accessibles. */
+export type DossierDetail = Omit<
+  Prisma.DossierGetPayload<{ include: typeof dossierDetailInclude }>,
+  'documents'
+> & { documents: DossierDocumentWithUrl[] };
 
 export interface PaginationMeta {
   page: number;
@@ -262,6 +294,34 @@ export async function listDossiers(query: ListDossiersQuery): Promise<ListDossie
   ]);
 
   return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+}
+
+/**
+ * Détail d'un dossier avec ses documents accessibles (ouverture depuis le
+ * back-office, ou par le client propriétaire). L'accès est restreint au
+ * propriétaire OU au staff (`findDossierForUserOrThrow` : 404 / 403). Chaque
+ * pièce reçoit une URL signée fraîche (le bucket est privé) ; le chemin de
+ * stockage interne (`url`) n'est jamais exposé.
+ */
+export async function getDossierDetailForUser(
+  dossierId: string,
+  user: AuthUser,
+): Promise<DossierDetail> {
+  await findDossierForUserOrThrow(dossierId, user);
+
+  const dossier = await prisma.dossier.findUniqueOrThrow({
+    where: { id: dossierId },
+    include: dossierDetailInclude,
+  });
+
+  const documents = await Promise.all(
+    dossier.documents.map(async ({ url, ...meta }) => ({
+      ...meta,
+      signedUrl: await getSignedUrl(url),
+    })),
+  );
+
+  return { ...dossier, documents };
 }
 
 /**
