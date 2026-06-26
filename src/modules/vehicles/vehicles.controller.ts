@@ -1,4 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
+import { Role } from '@prisma/client';
+import { AppError } from '../../middlewares/errorHandler';
+import { AuthenticatedRequest } from '../../types';
 import * as vehiclesService from './vehicles.service';
 import {
   CreateVehicleInput,
@@ -6,14 +9,31 @@ import {
   listVehiclesQuerySchema,
 } from './vehicles.schema';
 
-export async function listVehicles(req: Request, res: Response, next: NextFunction): Promise<void> {
+/** Vrai si l'appelant identifié (optionalAuthenticate) est un membre du back-office. */
+function isStaff(req: AuthenticatedRequest): boolean {
+  return req.user?.role === Role.GESTIONNAIRE || req.user?.role === Role.ADMIN;
+}
+
+export async function listVehicles(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
   try {
     // On parse la query string ici plutôt que dans un middleware : la query
     // nécessite coercition (string -> number) et valeurs par défaut, et le
     // résultat est ainsi entièrement typé (ListVehiclesQuery) sans `any`.
     // Un échec lève un ZodError, capté par le errorHandler central (-> 400).
     const query = listVehiclesQuerySchema.parse(req.query);
-    const result = await vehiclesService.listVehicles(query);
+
+    // Mode back-office : réservé au staff. Un visiteur (ou un CLIENT) qui tente
+    // `?scope=admin` reçoit 403 — le filtre public n'est jamais contournable.
+    const wantsAdmin = query.scope === 'admin';
+    if (wantsAdmin && !isStaff(req)) {
+      throw new AppError(403, 'Accès réservé au back-office');
+    }
+
+    const result = await vehiclesService.listVehicles(query, wantsAdmin);
     res.status(200).json(result);
   } catch (error) {
     next(error);
@@ -21,12 +41,14 @@ export async function listVehicles(req: Request, res: Response, next: NextFuncti
 }
 
 export async function getVehicleById(
-  req: Request,
+  req: AuthenticatedRequest,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
-    const vehicle = await vehiclesService.getVehicleById(req.params.id);
+    // Un staff peut consulter un véhicule retiré (available=false) pour l'éditer ;
+    // le public reste sur un 404 (cf. service).
+    const vehicle = await vehiclesService.getVehicleById(req.params.id, isStaff(req));
     res.status(200).json({ data: vehicle });
   } catch (error) {
     next(error);

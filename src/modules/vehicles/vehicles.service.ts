@@ -23,15 +23,32 @@ export interface ListVehiclesResult {
  * dynamiquement : on n'ajoute un critère que si le filtre est réellement
  * présent dans la query string.
  */
-export async function listVehicles(query: ListVehiclesQuery): Promise<ListVehiclesResult> {
-  const { brand, model, fuelType, purchaseType, minPrice, maxPrice, maxMileage, page, limit } =
-    query;
+export async function listVehicles(
+  query: ListVehiclesQuery,
+  admin = false,
+): Promise<ListVehiclesResult> {
+  const {
+    brand,
+    model,
+    fuelType,
+    purchaseType,
+    minPrice,
+    maxPrice,
+    maxMileage,
+    page,
+    limit,
+    status,
+    available,
+  } = query;
 
-  const where: Prisma.VehicleWhereInput = {
-    // Catalogue public : non soft-deleted (available) ET commercialement libre.
-    available: true,
-    status: VehicleStatus.DISPONIBLE,
-  };
+  // Public : non soft-deleted (available) ET commercialement libre (DISPONIBLE).
+  // Back-office : tout le parc, avec filtres status/available facultatifs.
+  const where: Prisma.VehicleWhereInput = admin
+    ? {
+        ...(status !== undefined ? { status } : {}),
+        ...(available !== undefined ? { available } : {}),
+      }
+    : { available: true, status: VehicleStatus.DISPONIBLE };
 
   // Recherche partielle insensible à la casse sur la marque / le modèle.
   if (brand) {
@@ -90,8 +107,12 @@ export async function listVehicles(query: ListVehiclesQuery): Promise<ListVehicl
  * Récupère un véhicule visible publiquement (fiche détaillée, US-002).
  * Un véhicule soft-deleted (available=false) est considéré comme inexistant -> 404.
  */
-export async function getVehicleById(id: string): Promise<Vehicle> {
-  const vehicle = await prisma.vehicle.findFirst({ where: { id, available: true } });
+export async function getVehicleById(id: string, includeUnavailable = false): Promise<Vehicle> {
+  // Back-office (includeUnavailable) : on récupère le véhicule quel que soit son
+  // état pour permettre son édition. Public : un véhicule retiré = 404.
+  const vehicle = includeUnavailable
+    ? await prisma.vehicle.findUnique({ where: { id } })
+    : await prisma.vehicle.findFirst({ where: { id, available: true } });
 
   if (!vehicle) {
     throw new AppError(404, 'Véhicule introuvable');
