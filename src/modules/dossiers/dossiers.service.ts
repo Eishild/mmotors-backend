@@ -17,6 +17,7 @@ import {
   UpdateDossierStatusInput,
 } from './dossiers.schema';
 import { getSignedUrl, uploadDocument } from './storage.service';
+import { PricedOption, computeMonthlyOptionsTotal, priceOptions } from './options.catalog';
 
 /** Statuts considérés comme "terminés" : un dossier dans cet état ne bloque pas un nouveau dépôt. */
 const TERMINAL_STATUSES: DossierStatus[] = [DossierStatus.VALIDE, DossierStatus.REFUSE];
@@ -47,6 +48,16 @@ const ALLOWED_TRANSITIONS: Record<DossierStatus, DossierStatus[]> = {
 /** Dossier renvoyé avec ses options (relation incluse). */
 export type DossierWithOptions = Prisma.DossierGetPayload<{ include: { options: true } }>;
 
+/**
+ * Dossier enrichi du détail tarifaire de ses options : chaque option avec son
+ * prix mensuel + le total mensuel. Permet au front d'afficher/vérifier le total
+ * sans recalculer les prix (source de vérité serveur, cf. options.catalog).
+ */
+export interface DossierWithPricedOptions extends DossierWithOptions {
+  pricedOptions: PricedOption[];
+  monthlyOptionsTotal: Prisma.Decimal;
+}
+
 /** Document enrichi d'une URL signée fraîche (valable 60 s) pour accès immédiat. */
 export interface DocumentWithSignedUrl extends Document {
   signedUrl: string;
@@ -61,7 +72,10 @@ export interface DocumentWithSignedUrl extends Document {
  * le vôtre) : un client ne doit pas pouvoir sonder l'existence des dossiers
  * d'autrui, mais renvoyer 403 ici ne fuite rien de plus puisqu'il a fourni l'id.
  */
-async function findDossierForUserOrThrow(dossierId: string, user: AuthUser): Promise<{ id: string }> {
+async function findDossierForUserOrThrow(
+  dossierId: string,
+  user: AuthUser,
+): Promise<{ id: string }> {
   const dossier = await prisma.dossier.findUnique({
     where: { id: dossierId },
     select: { id: true, clientId: true },
@@ -150,7 +164,7 @@ export async function createDossier(
   }
 
   if (vehicle.status !== VehicleStatus.DISPONIBLE) {
-    throw new AppError(409, 'Ce véhicule n\'est pas disponible pour un nouveau dossier');
+    throw new AppError(409, "Ce véhicule n'est pas disponible pour un nouveau dossier");
   }
 
   const expectedType = expectedDossierType(vehicle.purchaseType);
@@ -346,10 +360,7 @@ export async function updateDossierStatus(
   }
 
   if (!ALLOWED_TRANSITIONS[dossier.status].includes(input.status)) {
-    throw new AppError(
-      409,
-      `Transition de statut invalide : ${dossier.status} → ${input.status}`,
-    );
+    throw new AppError(409, `Transition de statut invalide : ${dossier.status} → ${input.status}`);
   }
 
   return prisma.dossier.update({
@@ -369,17 +380,22 @@ export async function updateDossierStatus(
  * reçoit 403 (les options sont un choix personnel du locataire). Gardes :
  *  - dossier inexistant -> 404 ;
  *  - pas le propriétaire -> 403 ;
- *  - dossier non LOCATION -> 409 (les options ne concernent que la location) ;
+ *  - dossier de type ACHAT -> 400 (les options ne concernent que la LOCATION :
+ *    requête invalide pour ce type de dossier) ;
  *  - dossier finalisé (VALIDE/REFUSE) -> 409 (ses options ne sont plus modifiables).
  *
  * createMany + skipDuplicates : ré-ajouter une option déjà présente est
  * idempotent (respecte @@unique([dossierId, type]) sans lever d'erreur).
+ *
+ * Réponse enrichie : options + détail tarifaire (prix mensuel par option et
+ * total mensuel), calculé à partir du catalogue serveur pour que le front
+ * affiche le total sans pouvoir le falsifier.
  */
 export async function addOptionsToDossier(
   dossierId: string,
   clientId: string,
   input: AddDossierOptionsInput,
-): Promise<DossierWithOptions> {
+): Promise<DossierWithPricedOptions> {
   const dossier = await prisma.dossier.findUnique({
     where: { id: dossierId },
     select: { clientId: true, type: true, status: true },
@@ -403,8 +419,18 @@ export async function addOptionsToDossier(
     skipDuplicates: true,
   });
 
-  return prisma.dossier.findUniqueOrThrow({
+  const updated = await prisma.dossier.findUniqueOrThrow({
     where: { id: dossierId },
     include: { options: true },
   });
+
+  // Total recalculé sur l'ENSEMBLE des options du dossier (pas seulement celles
+  // ajoutées dans cette requête), pour refléter le coût mensuel réel.
+  const selectedTypes = updated.options.map((o) => o.type);
+
+  return {
+    ...updated,
+    pricedOptions: priceOptions(selectedTypes),
+    monthlyOptionsTotal: computeMonthlyOptionsTotal(selectedTypes),
+  };
 }

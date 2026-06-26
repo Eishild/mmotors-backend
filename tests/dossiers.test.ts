@@ -58,8 +58,7 @@ const createdVehicleIds: string[] = [];
 
 const pdf = Buffer.from('%PDF-1.4 fake content');
 
-const post = (id: string) =>
-  request(app).post(`/api/v1/dossiers/${id}/documents`);
+const post = (id: string) => request(app).post(`/api/v1/dossiers/${id}/documents`);
 
 const baseVehicle = {
   brand: 'TestMotors',
@@ -141,7 +140,7 @@ afterAll(async () => {
 }, 30000);
 
 describe('POST /api/v1/dossiers/:id/documents', () => {
-  it('refuse l\'accès sans token (401)', async () => {
+  it("refuse l'accès sans token (401)", async () => {
     const res = await post(dossierId).attach('document', pdf, {
       filename: 'cni.pdf',
       contentType: 'application/pdf',
@@ -149,7 +148,7 @@ describe('POST /api/v1/dossiers/:id/documents', () => {
     expect(res.status).toBe(401);
   });
 
-  it('permet au CLIENT propriétaire d\'uploader un PDF (201) et persiste le document', async () => {
+  it("permet au CLIENT propriétaire d'uploader un PDF (201) et persiste le document", async () => {
     const res = await post(dossierId)
       .set('Authorization', `Bearer ${ownerToken}`)
       .attach('document', pdf, { filename: 'cni.pdf', contentType: 'application/pdf' });
@@ -168,7 +167,7 @@ describe('POST /api/v1/dossiers/:id/documents', () => {
     expect(inDb?.url).toBe(`${dossierId}/mocked-uuid.pdf`);
   });
 
-  it('permet à un GESTIONNAIRE d\'uploader (201)', async () => {
+  it("permet à un GESTIONNAIRE d'uploader (201)", async () => {
     const res = await post(dossierId)
       .set('Authorization', `Bearer ${gestionnaireToken}`)
       .attach('document', pdf, { filename: 'justif.png', contentType: 'image/png' });
@@ -176,7 +175,7 @@ describe('POST /api/v1/dossiers/:id/documents', () => {
     expect(res.status).toBe(201);
   });
 
-  it('interdit à un autre CLIENT d\'uploader sur le dossier d\'autrui (403)', async () => {
+  it("interdit à un autre CLIENT d'uploader sur le dossier d'autrui (403)", async () => {
     const res = await post(dossierId)
       .set('Authorization', `Bearer ${otherClientToken}`)
       .attach('document', pdf, { filename: 'cni.pdf', contentType: 'application/pdf' });
@@ -192,7 +191,7 @@ describe('POST /api/v1/dossiers/:id/documents', () => {
     expect(res.status).toBe(404);
   });
 
-  it('renvoie 400 si l\'id de dossier n\'est pas un UUID', async () => {
+  it("renvoie 400 si l'id de dossier n'est pas un UUID", async () => {
     const res = await post('not-a-uuid')
       .set('Authorization', `Bearer ${ownerToken}`)
       .attach('document', pdf, { filename: 'cni.pdf', contentType: 'application/pdf' });
@@ -200,7 +199,7 @@ describe('POST /api/v1/dossiers/:id/documents', () => {
     expect(res.status).toBe(400);
   });
 
-  it('renvoie 400 si aucun fichier n\'est fourni', async () => {
+  it("renvoie 400 si aucun fichier n'est fourni", async () => {
     const res = await post(dossierId).set('Authorization', `Bearer ${ownerToken}`);
     expect(res.status).toBe(400);
   });
@@ -232,7 +231,7 @@ describe('POST /api/v1/dossiers/:id/documents', () => {
 describe('POST /api/v1/dossiers (création)', () => {
   const create = () => request(app).post('/api/v1/dossiers');
 
-  it('refuse l\'accès sans token (401)', async () => {
+  it("refuse l'accès sans token (401)", async () => {
     const res = await create().send({ vehicleId: venteVehicleId, type: DossierType.ACHAT });
     expect(res.status).toBe(401);
   });
@@ -330,7 +329,7 @@ describe('POST /api/v1/dossiers (création)', () => {
     expect(second.status).toBe(409);
   });
 
-  it('renvoie 400 si vehicleId n\'est pas un UUID', async () => {
+  it("renvoie 400 si vehicleId n'est pas un UUID", async () => {
     const res = await create()
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ vehicleId: 'not-a-uuid', type: DossierType.ACHAT });
@@ -365,7 +364,7 @@ describe('GET /api/v1/dossiers/me (US-007)', () => {
     });
   }, 30000);
 
-  it('refuse l\'accès sans token (401)', async () => {
+  it("refuse l'accès sans token (401)", async () => {
     const res = await request(app).get('/api/v1/dossiers/me');
     expect(res.status).toBe(401);
   });
@@ -377,9 +376,7 @@ describe('GET /api/v1/dossiers/me (US-007)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(2);
-    expect(
-      res.body.data.every((d: { clientId: string }) => d.clientId === meClientId),
-    ).toBe(true);
+    expect(res.body.data.every((d: { clientId: string }) => d.clientId === meClientId)).toBe(true);
     // Relation véhicule incluse pour le suivi…
     expect(res.body.data[0].vehicle).toMatchObject({ brand: 'TestMotors' });
     // …mais aucune fuite du chemin de stockage des documents (url absente).
@@ -390,7 +387,7 @@ describe('GET /api/v1/dossiers/me (US-007)', () => {
 describe('GET /api/v1/dossiers (US-010)', () => {
   const list = () => request(app).get('/api/v1/dossiers');
 
-  it('refuse l\'accès à un CLIENT (403)', async () => {
+  it("refuse l'accès à un CLIENT (403)", async () => {
     const res = await list().set('Authorization', `Bearer ${ownerToken}`);
     expect(res.status).toBe(403);
   });
@@ -427,9 +424,9 @@ describe('GET /api/v1/dossiers (US-010)', () => {
       .query({ type: DossierType.LOCATION });
 
     expect(res.status).toBe(200);
-    expect(
-      res.body.data.every((d: { type: string }) => d.type === DossierType.LOCATION),
-    ).toBe(true);
+    expect(res.body.data.every((d: { type: string }) => d.type === DossierType.LOCATION)).toBe(
+      true,
+    );
   });
 
   it('renvoie 400 pour un statut invalide', async () => {
@@ -468,7 +465,7 @@ describe('PATCH /api/v1/dossiers/:id/status (US-011)', () => {
     freshDossierId = d.id;
   }, 30000);
 
-  it('refuse l\'accès à un CLIENT (403)', async () => {
+  it("refuse l'accès à un CLIENT (403)", async () => {
     const res = await patch(freshDossierId)
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ status: DossierStatus.EN_COURS });
@@ -530,7 +527,7 @@ describe('PATCH /api/v1/dossiers/:id/status (US-011)', () => {
     expect(res.status).toBe(404);
   });
 
-  it('renvoie 400 si l\'id n\'est pas un UUID', async () => {
+  it("renvoie 400 si l'id n'est pas un UUID", async () => {
     const res = await patch('not-a-uuid')
       .set('Authorization', `Bearer ${gestionnaireToken}`)
       .send({ status: DossierStatus.EN_COURS });
@@ -579,21 +576,21 @@ describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
     finalizedDossierId = finalized.id;
   }, 30000);
 
-  it('refuse l\'accès sans token (401)', async () => {
+  it("refuse l'accès sans token (401)", async () => {
     const res = await options(locationDossierId).send({
       options: [OptionType.ASSURANCE_TOUS_RISQUES],
     });
     expect(res.status).toBe(401);
   });
 
-  it('interdit à un GESTIONNAIRE d\'ajouter des options (403)', async () => {
+  it("interdit à un GESTIONNAIRE d'ajouter des options (403)", async () => {
     const res = await options(locationDossierId)
       .set('Authorization', `Bearer ${gestionnaireToken}`)
       .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
     expect(res.status).toBe(403);
   });
 
-  it('interdit à un autre CLIENT d\'ajouter des options au dossier d\'autrui (403)', async () => {
+  it("interdit à un autre CLIENT d'ajouter des options au dossier d'autrui (403)", async () => {
     // ownerToken = client A, dossier appartient à optClient (client B).
     const res = await options(locationDossierId)
       .set('Authorization', `Bearer ${ownerToken}`)
@@ -601,7 +598,7 @@ describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
     expect(res.status).toBe(403);
   });
 
-  it('permet au propriétaire d\'ajouter des options (201)', async () => {
+  it("permet au propriétaire d'ajouter des options et renvoie le détail tarifaire (201)", async () => {
     const res = await options(locationDossierId)
       .set('Authorization', `Bearer ${optToken}`)
       .send({
@@ -612,6 +609,18 @@ describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
     const types = res.body.data.options.map((o: { type: string }) => o.type);
     expect(types).toContain(OptionType.ASSURANCE_TOUS_RISQUES);
     expect(types).toContain(OptionType.ASSISTANCE_DEPANNAGE);
+
+    // Détail tarifaire : chaque option a un prix mensuel, et le total est leur somme.
+    const priced = res.body.data.pricedOptions as {
+      type: string;
+      label: string;
+      monthlyPrice: string;
+    }[];
+    const assurance = priced.find((o) => o.type === OptionType.ASSURANCE_TOUS_RISQUES);
+    expect(assurance?.label).toEqual(expect.any(String));
+    expect(Number(assurance?.monthlyPrice)).toBeCloseTo(49.9, 2);
+    // 49.90 (assurance) + 9.90 (assistance) = 59.80 €/mois.
+    expect(Number(res.body.data.monthlyOptionsTotal)).toBeCloseTo(59.8, 2);
   });
 
   it('est idempotent : ré-ajouter une option existante ne la duplique pas (201)', async () => {
@@ -626,7 +635,7 @@ describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
     expect(assurances).toHaveLength(1);
   });
 
-  it('refuse les options sur un dossier ACHAT (409)', async () => {
+  it('refuse les options sur un dossier ACHAT (400)', async () => {
     const res = await options(achatDossierId)
       .set('Authorization', `Bearer ${optToken}`)
       .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
@@ -640,7 +649,7 @@ describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
     expect(res.status).toBe(409);
   });
 
-  it('refuse un tableau d\'options vide (400)', async () => {
+  it("refuse un tableau d'options vide (400)", async () => {
     const res = await options(locationDossierId)
       .set('Authorization', `Bearer ${optToken}`)
       .send({ options: [] });
@@ -654,11 +663,37 @@ describe('POST /api/v1/dossiers/:id/options (US-006)', () => {
     expect(res.status).toBe(404);
   });
 
-  it('renvoie 400 si l\'id n\'est pas un UUID', async () => {
+  it("renvoie 400 si l'id n'est pas un UUID", async () => {
     const res = await options('not-a-uuid')
       .set('Authorization', `Bearer ${optToken}`)
       .send({ options: [OptionType.ASSURANCE_TOUS_RISQUES] });
     expect(res.status).toBe(400);
+  });
+});
+
+// ─── GET /api/v1/dossiers/options/catalog (US-006) ─────────────────────────────
+describe('GET /api/v1/dossiers/options/catalog', () => {
+  it('renvoie les 4 options avec libellé et prix mensuel positif (200, public)', async () => {
+    // Pas d'en-tête d'auth : le catalogue tarifaire est public.
+    const res = await request(app).get('/api/v1/dossiers/options/catalog');
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(Object.keys(OptionType).length);
+
+    const types = res.body.data.map((o: { type: string }) => o.type).sort();
+    expect(types).toEqual([...Object.values(OptionType)].sort());
+
+    for (const option of res.body.data as { label: string; monthlyPrice: string }[]) {
+      expect(option.label).toEqual(expect.any(String));
+      expect(Number(option.monthlyPrice)).toBeGreaterThan(0);
+    }
+  });
+
+  it('trie les options par prix mensuel décroissant', async () => {
+    const res = await request(app).get('/api/v1/dossiers/options/catalog');
+    const prices = (res.body.data as { monthlyPrice: string }[]).map((o) => Number(o.monthlyPrice));
+    const sortedDesc = [...prices].sort((a, b) => b - a);
+    expect(prices).toEqual(sortedDesc);
   });
 });
 
@@ -692,7 +727,7 @@ describe('GET /api/v1/dossiers/:id', () => {
     await prisma.dossier.delete({ where: { id: detailDossierId } });
   });
 
-  it('refuse l\'accès sans token (401)', async () => {
+  it("refuse l'accès sans token (401)", async () => {
     const res = await request(app).get(`/api/v1/dossiers/${detailDossierId}`);
     expect(res.status).toBe(401);
   });
@@ -711,7 +746,7 @@ describe('GET /api/v1/dossiers/:id', () => {
     expect(res.status).toBe(404);
   });
 
-  it('renvoie 400 si l\'id n\'est pas un UUID', async () => {
+  it("renvoie 400 si l'id n'est pas un UUID", async () => {
     const res = await request(app)
       .get('/api/v1/dossiers/not-a-uuid')
       .set('Authorization', `Bearer ${gestionnaireToken}`);

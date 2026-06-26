@@ -13,6 +13,12 @@ import * as dossiersController from './dossiers.controller';
 
 const router = Router();
 
+// ─── Catalogue des options de location (US-006) ────────────────────────────────
+// Référence tarifaire (libellé + prix mensuel des 4 options). Public : simple
+// liste de prix, utile dès la consultation d'un véhicule en location. Déclaré
+// avant "/:id" — chemin distinct (2 segments), pas de capture par la route param.
+router.get('/options/catalog', dossiersController.listOptionsCatalog);
+
 // ─── Suivi client (US-007) ─────────────────────────────────────────────────────
 // "/me" : le client connecté ne voit que ses propres dossiers (filtre clientId).
 // Déclaré avant les routes paramétrées pour éviter toute ambiguïté de matching.
