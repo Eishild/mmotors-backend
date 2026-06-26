@@ -9,6 +9,18 @@ import {
   listDossiersQuerySchema,
 } from './dossiers.schema';
 import * as dossiersService from './dossiers.service';
+import { getOptionsCatalog } from './options.catalog';
+
+/**
+ * GET /dossiers/options/catalog — catalogue des options de location (US-006).
+ *
+ * Référence tarifaire publique : les 4 options avec libellé et prix mensuel.
+ * Alimente les cases à cocher de l'écran de dépôt (le front calcule le total à
+ * la sélection ; le serveur fait foi lors de l'ajout effectif via POST /:id/options).
+ */
+export function listOptionsCatalog(_req: AuthenticatedRequest, res: Response): void {
+  res.status(200).json({ data: getOptionsCatalog() });
+}
 
 /**
  * GET /dossiers/me — suivi par le client de ses propres dossiers (US-007).
